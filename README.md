@@ -1,5 +1,16 @@
 ## AI Chat (Next.js + Bun + SQLite)
 
+### What This Program Is
+
+A simplified ChatGPT-like interface with conversation threads, message persistence, and Generative UI tools. It includes a sidebar for thread history, a streaming chat area, confirmation UI for destructive actions, and basic XLSX tooling with range mentions.
+
+### Tech Stack
+
+- Next.js 16 (App Router) + TypeScript
+- Vercel AI SDK (`useChat`, tool calling)
+- Bun runtime + SQLite (via `better-sqlite3`)
+- React + Tailwind CSS
+
 ### Setup
 
 - Install dependencies: `bun install`
@@ -45,6 +56,15 @@
 - No auth or multi-user isolation.
 - XLSX updates are direct file writes (single-writer expected).
 - Tooling is enabled only when prompts include `@Sheet!A1:B3` range references.
+
+### Evaluation Criteria Notes
+
+- Chat, threads, persistence: implemented.
+- Client tools + confirmation flows: implemented, but still basic.
+- XLSX read/write + modal + mentions: partially implemented.
+- Code structure and typing: separated API/DB/UI layers with typed models.
+- UI/UX: minimal but functional.
+- Bonus e2e tests: not included.
 
 ### Requirement Mapping
 

@@ -18,6 +18,15 @@ export type Message = {
   created_at: number;
 };
 
+export type Upload = {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  storage_path: string;
+  created_at: number;
+};
+
 export type CreateThreadInput = {
   title: string;
   id?: string;
@@ -32,6 +41,20 @@ export type SaveMessageInput = {
   createdAt?: number;
 };
 
+export type UpdateMessageInput = {
+  id: string;
+  content: string;
+};
+
+export type SaveUploadInput = {
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  storagePath: string;
+  id?: string;
+  createdAt?: number;
+};
+
 // Cached statements
 type DbStatement = Statement<unknown[], unknown>;
 
@@ -41,6 +64,10 @@ type Statements = {
   insertMessage: DbStatement | null;
   listMessagesByThread: DbStatement | null;
   deleteThread: DbStatement | null;
+  insertUpload: DbStatement | null;
+  getUpload: DbStatement | null;
+  updateMessage: DbStatement | null;
+  deleteMessage: DbStatement | null;
 };
 
 const statements: Statements = {
@@ -49,6 +76,10 @@ const statements: Statements = {
   insertMessage: null,
   listMessagesByThread: null,
   deleteThread: null,
+  insertUpload: null,
+  getUpload: null,
+  updateMessage: null,
+  deleteMessage: null,
 };
 
 function getStatements() {
@@ -81,6 +112,28 @@ function getStatements() {
 
   if (!statements.deleteThread) {
     statements.deleteThread = db.prepare("DELETE FROM threads WHERE id = ?");
+  }
+
+  if (!statements.insertUpload) {
+    statements.insertUpload = db.prepare(
+      "INSERT INTO uploads (id, filename, mime_type, size_bytes, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    );
+  }
+
+  if (!statements.getUpload) {
+    statements.getUpload = db.prepare(
+      "SELECT id, filename, mime_type, size_bytes, storage_path, created_at FROM uploads WHERE id = ?"
+    );
+  }
+
+  if (!statements.updateMessage) {
+    statements.updateMessage = db.prepare(
+      "UPDATE messages SET content = ? WHERE id = ?"
+    );
+  }
+
+  if (!statements.deleteMessage) {
+    statements.deleteMessage = db.prepare("DELETE FROM messages WHERE id = ?");
   }
 
   return statements;
@@ -147,4 +200,44 @@ export async function deleteThread(threadId: string): Promise<void> {
   // Deleting the thread cascades to its messages via foreign key.
   const { deleteThread: deleteThreadStatement } = getStatements();
   deleteThreadStatement?.run(threadId);
+}
+
+export async function updateMessage(
+  input: UpdateMessageInput
+): Promise<void> {
+  const { updateMessage: updateMessageStatement } = getStatements();
+  updateMessageStatement?.run(input.content, input.id);
+}
+
+export async function deleteMessage(messageId: string): Promise<void> {
+  const { deleteMessage: deleteMessageStatement } = getStatements();
+  deleteMessageStatement?.run(messageId);
+}
+
+export async function saveUpload(input: SaveUploadInput): Promise<Upload> {
+  const upload: Upload = {
+    id: input.id ?? crypto.randomUUID(),
+    filename: input.filename,
+    mime_type: input.mimeType,
+    size_bytes: input.sizeBytes,
+    storage_path: input.storagePath,
+    created_at: input.createdAt ?? Date.now(),
+  };
+
+  const { insertUpload } = getStatements();
+  insertUpload?.run(
+    upload.id,
+    upload.filename,
+    upload.mime_type,
+    upload.size_bytes,
+    upload.storage_path,
+    upload.created_at
+  );
+
+  return upload;
+}
+
+export async function getUploadById(id: string): Promise<Upload | null> {
+  const { getUpload } = getStatements();
+  return (getUpload?.get(id) as Upload | undefined) ?? null;
 }

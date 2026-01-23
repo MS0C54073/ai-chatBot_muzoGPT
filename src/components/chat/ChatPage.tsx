@@ -24,9 +24,16 @@ type MessageRecord = {
 type ChatThreadProps = {
   threadId: string;
   initialMessages: AiMessage[];
+  onLocalMessageUpdate?: (updater: (prev: MessageRecord[]) => MessageRecord[]) => void;
 };
 
-function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
+type UploadedFile = {
+  id: string;
+  filename: string;
+  mime_type: string;
+};
+
+function ChatThread({ threadId, initialMessages, onLocalMessageUpdate }: ChatThreadProps) {
   // Extract the visible text from streamed or persisted messages.
   const getMessageText = (message: AiMessage) => {
     if ("content" in message && typeof message.content === "string") {
@@ -40,6 +47,9 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
     return "";
   };
   const [chatError, setChatError] = useState<string | null>(null);
+  const [isTableModalOpen, setIsTableModalOpen] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<UploadedFile[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
   const {
     messages,
     input,
@@ -51,7 +61,7 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
     append,
   } = useChat({
     api: "/api/chat",
-    body: { threadId },
+    body: { threadId, fileIds: attachedFiles.map((file) => file.id) },
     initialMessages,
     streamProtocol: "text",
     onError(error) {
@@ -62,11 +72,22 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
     },
   });
 
+  const [editingMessage, setEditingMessage] = useState<{
+    id: string;
+    content: string;
+  } | null>(null);
+  const [pendingDeleteMessage, setPendingDeleteMessage] =
+    useState<{ id: string } | null>(null);
+
   const handleConfirmAction = (toolCallId: string, actionId?: string) => {
-    // Report confirmation back to the model without executing side effects.
+    // Send tool result to the model so it can perform the confirmed action.
     addToolResult({
       toolCallId,
       result: { confirmed: true, actionId },
+    });
+    append({
+      role: "user",
+      content: `Confirmed action${actionId ? ` (${actionId})` : ""}. Proceed.`,
     });
   };
 
@@ -82,7 +103,49 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
     });
   };
 
-  const [isTableModalOpen, setIsTableModalOpen] = useState(false);
+  async function handleSaveEdit() {
+    if (!editingMessage) {
+      return;
+    }
+    const response = await fetch(`/api/threads/${threadId}/messages`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: editingMessage.id,
+        content: editingMessage.content,
+      }),
+    });
+    if (response.ok && onLocalMessageUpdate) {
+      onLocalMessageUpdate((prev) =>
+        prev.map((message) =>
+          message.id === editingMessage.id
+            ? { ...message, content: editingMessage.content }
+            : message
+        )
+      );
+    }
+    setEditingMessage(null);
+  }
+
+  async function confirmDeleteMessage(message: { id: string }) {
+    const response = await fetch(`/api/threads/${threadId}/messages`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: message.id }),
+    });
+    if (response.ok && onLocalMessageUpdate) {
+      onLocalMessageUpdate((prev) =>
+        prev.filter((item) => item.id !== message.id)
+      );
+    }
+    setPendingDeleteMessage(null);
+  }
+
+  function cancelDeleteMessage() {
+    setPendingDeleteMessage(null);
+  }
+
+  
   const tableSheet = "Sheet1";
   const tableColumns = ["A", "B", "C", "D", "E"];
   const tableRows: Array<Array<string | number | null>> = [
@@ -98,6 +161,27 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
       current.trim().length === 0 ? rangeRef : `${current} ${rangeRef}`
     );
     setIsTableModalOpen(false);
+  }
+
+  async function handleFileUpload(file: File) {
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/uploads", {
+      method: "POST",
+      body: formData,
+    });
+    setIsUploading(false);
+    if (!response.ok) {
+      setChatError("Failed to upload file.");
+      return;
+    }
+    const uploaded = (await response.json()) as UploadedFile;
+    setAttachedFiles((prev) => [...prev, uploaded]);
+  }
+
+  function handleRemoveFile(id: string) {
+    setAttachedFiles((prev) => prev.filter((file) => file.id !== id));
   }
 
   return (
@@ -132,6 +216,37 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
                     </div>
                   </div>
                 ) : null}
+                <div
+                  className={
+                    message.role === "user"
+                      ? "flex justify-end"
+                      : "flex justify-start"
+                  }
+                >
+                  <div className="flex gap-2 text-[11px] text-gray-400">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditingMessage({
+                          id: message.id,
+                          content: text,
+                        })
+                      }
+                      className="rounded-md border border-gray-800 px-2 py-1 hover:bg-gray-900"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+      setPendingDeleteMessage({ id: message.id })
+                      }
+                      className="rounded-md border border-gray-800 px-2 py-1 hover:bg-gray-900"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
                 {message.toolInvocations?.map((toolInvocation) => {
                   const toolCallId = toolInvocation.toolCallId;
                   const toolName = toolInvocation.toolName;
@@ -203,6 +318,7 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
       <form
         onSubmit={(event) => {
           setChatError(null);
+          setAttachedFiles([]);
           handleSubmit(event);
         }}
         className="border-t border-gray-900 bg-gray-950 px-6 py-4"
@@ -230,6 +346,40 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
             Send
           </button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-400">
+          <label className="rounded-md border border-gray-800 px-2 py-1 text-xs text-gray-300 hover:bg-gray-900">
+            <input
+              type="file"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  handleFileUpload(file);
+                  event.target.value = "";
+                }
+              }}
+            />
+            {isUploading ? "Uploading..." : "Attach file"}
+          </label>
+          {attachedFiles.map((file) => (
+            <span
+              key={file.id}
+              className="flex items-center gap-2 rounded-full border border-gray-800 px-2 py-1"
+            >
+              {file.filename}
+              <button
+                type="button"
+                onClick={() => handleRemoveFile(file.id)}
+                className="text-gray-500 hover:text-gray-200"
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+          {attachedFiles.length === 0 ? (
+            <span>Attach a text/CSV/JSON file to provide context.</span>
+          ) : null}
+        </div>
       </form>
       <TableModal
         isOpen={isTableModalOpen}
@@ -244,6 +394,54 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
           {chatError}
         </div>
       ) : null}
+      {editingMessage ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+          <div className="w-full max-w-xl rounded-2xl border border-gray-800 bg-gray-950 p-4 text-sm text-gray-100">
+            <div className="text-base font-semibold">Edit message</div>
+            <textarea
+              value={editingMessage.content}
+              onChange={(event) =>
+                setEditingMessage((current) =>
+                  current ? { ...current, content: event.target.value } : current
+                )
+              }
+              className="mt-3 min-h-[120px] w-full rounded-xl border border-gray-800 bg-gray-900 p-3 text-sm text-gray-100"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingMessage(null)}
+                className="rounded-md border border-gray-800 px-3 py-2 text-xs text-gray-300 hover:bg-gray-900"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveEdit}
+                className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pendingDeleteMessage ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+          <ConfirmActionCard
+            args={{
+              title: "Delete message?",
+              description:
+                "Are you sure you want to delete this message? This cannot be undone.",
+              actionId: pendingDeleteMessage.id,
+              confirmLabel: "Yes, delete",
+              cancelLabel: "No, keep it",
+            }}
+            onConfirm={() => confirmDeleteMessage(pendingDeleteMessage)}
+            onCancel={cancelDeleteMessage}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -254,6 +452,7 @@ export default function () {
   const [threadMessages, setThreadMessages] = useState<MessageRecord[]>([]);
   const [isLoadingThreads, setIsLoadingThreads] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<Thread | null>(null);
   const initialLoadRef = React.useRef(true);
 
   useEffect(() => {
@@ -357,16 +556,20 @@ export default function () {
     setThreadMessages([]);
   }
 
-  async function handleDeleteThread(threadId: string) {
+  async function handleDeleteThread(thread: Thread) {
+    setPendingDelete(thread);
+  }
+
+  async function confirmDeleteThread(thread: Thread) {
     // Delete the thread and refresh the list.
-    const response = await fetch(`/api/threads/${threadId}`, {
+    const response = await fetch(`/api/threads/${thread.id}`, {
       method: "DELETE",
     });
     if (!response.ok) {
       return;
     }
-    setThreads((prev) => prev.filter((thread) => thread.id !== threadId));
-    if (activeThreadId === threadId) {
+    setThreads((prev) => prev.filter((item) => item.id !== thread.id));
+    if (activeThreadId === thread.id) {
       setActiveThreadId(null);
       setThreadMessages([]);
     }
@@ -376,6 +579,28 @@ export default function () {
       setThreads(data);
       setActiveThreadId(data[0]?.id ?? null);
     }
+    setPendingDelete(null);
+  }
+
+  async function cancelDeleteThread(thread: Thread) {
+    if (activeThreadId) {
+      const response = await fetch(
+        `/api/threads/${activeThreadId}/messages`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            role: "user",
+            content: `Cancelled deletion of thread \"${thread.title}\".`,
+          }),
+        }
+      );
+      if (response.ok) {
+        const message = (await response.json()) as MessageRecord;
+        setThreadMessages((prev) => [...prev, message]);
+      }
+    }
+    setPendingDelete(null);
   }
 
   function handleSelectThread(threadId: string) {
@@ -383,7 +608,12 @@ export default function () {
   }
 
   return (
-    <div className="flex h-screen bg-gray-950 text-gray-100">
+    <div className="relative flex h-screen bg-gray-950 text-gray-100">
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div className="select-none text-[180px] font-bold tracking-tight text-white/5 sm:text-[260px] lg:text-[320px]">
+          muzoGPT
+        </div>
+      </div>
       <ThreadsSidebar
         threads={threads}
         activeThreadId={activeThreadId ?? undefined}
@@ -391,7 +621,7 @@ export default function () {
         onSelectThread={handleSelectThread}
         onDeleteThread={handleDeleteThread}
       />
-      <main className="flex flex-1 flex-col">
+      <main className="relative z-10 flex flex-1 flex-col">
         {isLoadingThreads ? (
           <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
             Loading threads...
@@ -418,11 +648,27 @@ export default function () {
                 key={activeThreadId}
                 threadId={activeThreadId}
                 initialMessages={initialMessages}
+                onLocalMessageUpdate={setThreadMessages}
               />
             )}
           </div>
         )}
       </main>
+      {pendingDelete ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6">
+          <ConfirmActionCard
+            args={{
+              title: "Delete thread?",
+              description: `Are you sure you want to delete \"${pendingDelete.title}\"? This cannot be undone.`,
+              actionId: pendingDelete.id,
+              confirmLabel: "Yes, delete",
+              cancelLabel: "No, keep it",
+            }}
+            onConfirm={() => confirmDeleteThread(pendingDelete)}
+            onCancel={() => cancelDeleteThread(pendingDelete)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

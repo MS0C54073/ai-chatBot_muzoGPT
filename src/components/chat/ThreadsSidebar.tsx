@@ -13,7 +13,7 @@ import React from "react";
    activeThreadId?: string;
    onNewThread: () => void;
    onSelectThread: (threadId: string) => void;
-  onDeleteThread?: (threadId: string) => void;
+  onDeleteThread?: (thread: Thread) => void;
  };
 
  export default function ThreadsSidebar({
@@ -24,10 +24,10 @@ import React from "react";
   onDeleteThread,
  }: ThreadsSidebarProps) {
    return (
-     <aside className="flex h-full w-64 flex-col border-r border-gray-800 bg-gray-950 text-gray-100">
+    <aside className="relative z-10 flex h-full w-64 flex-col border-r border-gray-800 bg-gray-950 text-gray-100">
        <div className="flex items-center justify-between px-4 py-3">
          <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-400">
-           Threads
+          History
          </h2>
          <button
            type="button"
@@ -73,7 +73,7 @@ import React from "react";
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation();
-                            onDeleteThread(thread.id);
+                            onDeleteThread(thread);
                           }}
                           className="absolute right-2 top-2 z-10 rounded-md border border-gray-700 px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-900"
                         >

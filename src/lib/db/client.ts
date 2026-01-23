@@ -56,5 +56,16 @@ export function getDb(): SqliteDatabase {
       ON messages(thread_id, created_at);
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS uploads (
+      id TEXT PRIMARY KEY,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size_bytes INTEGER NOT NULL,
+      storage_path TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+
   return db;
 }
