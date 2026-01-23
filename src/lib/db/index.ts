@@ -54,6 +54,7 @@ const statements: Statements = {
 function getStatements() {
   const db = getDb();
 
+  // Prepare and cache statements once for reuse.
   if (!statements.insertThread) {
     statements.insertThread = db.prepare(
       "INSERT INTO threads (id, title, created_at) VALUES (?, ?, ?)"
@@ -86,6 +87,7 @@ function getStatements() {
 }
 
 export async function createThread(input: CreateThreadInput): Promise<Thread> {
+  // Create a new thread record with a generated UUID.
   const thread: Thread = {
     id: input.id ?? crypto.randomUUID(),
     title: input.title,
@@ -102,6 +104,7 @@ export async function getThreads(
   limit = 50,
   offset = 0
 ): Promise<Thread[]> {
+  // Return threads ordered by most recent first.
   const { listThreads } = getStatements();
   return (listThreads?.all(limit, offset) as Thread[]) ?? [];
 }
@@ -109,6 +112,7 @@ export async function getThreads(
 export async function saveMessage(
   input: SaveMessageInput
 ): Promise<Message> {
+  // Persist a message linked to its thread.
   const message: Message = {
     id: input.id ?? crypto.randomUUID(),
     thread_id: input.threadId,
@@ -134,11 +138,13 @@ export async function getMessagesByThread(
   limit = 200,
   offset = 0
 ): Promise<Message[]> {
+  // Return messages in chronological order for the thread.
   const { listMessagesByThread } = getStatements();
   return (listMessagesByThread?.all(threadId, limit, offset) as Message[]) ?? [];
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
+  // Deleting the thread cascades to its messages via foreign key.
   const { deleteThread: deleteThreadStatement } = getStatements();
   deleteThreadStatement?.run(threadId);
 }

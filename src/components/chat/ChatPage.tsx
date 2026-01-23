@@ -27,6 +27,7 @@ type ChatThreadProps = {
 };
 
 function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
+  // Extract the visible text from streamed or persisted messages.
   const getMessageText = (message: AiMessage) => {
     if ("content" in message && typeof message.content === "string") {
       return message.content;
@@ -62,6 +63,7 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
   });
 
   const handleConfirmAction = (toolCallId: string, actionId?: string) => {
+    // Report confirmation back to the model without executing side effects.
     addToolResult({
       toolCallId,
       result: { confirmed: true, actionId },
@@ -69,6 +71,7 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
   };
 
   const handleCancelAction = (toolCallId: string, actionId?: string) => {
+    // Cancel the action and add a user-visible cancellation message.
     addToolResult({
       toolCallId,
       result: { confirmed: false, actionId, cancelled: true },
@@ -90,6 +93,7 @@ function ChatThread({ threadId, initialMessages }: ChatThreadProps) {
   ];
 
   function handleInsertRange(rangeRef: string) {
+    // Insert the selected range mention into the input.
     setInput((current) =>
       current.trim().length === 0 ? rangeRef : `${current} ${rangeRef}`
     );
@@ -256,6 +260,7 @@ export default function () {
     let cancelled = false;
 
     async function loadThreads() {
+      // Load threads and ensure an initial thread exists for input visibility.
       setIsLoadingThreads(true);
       const response = await fetch("/api/threads", { cache: "no-store" });
       if (!response.ok) {
@@ -295,6 +300,7 @@ export default function () {
     let cancelled = false;
 
     async function loadMessages() {
+      // Load messages for the active thread.
       setIsLoadingMessages(true);
       const response = await fetch(
         `/api/threads/${activeThreadId}/messages`,
@@ -341,6 +347,7 @@ export default function () {
   }
 
   async function handleNewThread() {
+    // Create and activate a fresh thread.
     const created = await createThread();
     if (!created) {
       return;
@@ -351,6 +358,7 @@ export default function () {
   }
 
   async function handleDeleteThread(threadId: string) {
+    // Delete the thread and refresh the list.
     const response = await fetch(`/api/threads/${threadId}`, {
       method: "DELETE",
     });

@@ -15,18 +15,18 @@ export function getDb(): SqliteDatabase {
     return db;
   }
 
-  // Ensure data directory exists
+  // Ensure data directory exists before opening the SQLite file.
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 
   db = new Database(process.env.SQLITE_PATH ?? DEFAULT_DB_PATH);
 
-  // Enable WAL and foreign keys
+  // Enable WAL and foreign keys for reliability and relational integrity.
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
 
-  // Initialize schema
+  // Initialize schema on first open.
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,

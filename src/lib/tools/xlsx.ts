@@ -32,6 +32,7 @@ function ensureWorkbookExists() {
     return;
   }
 
+  // Explicit error for missing XLSX so tools can surface a clear message.
   throw new Error(
     `Missing XLSX file at ${DATA_PATH}. Add /data/example.xlsx to enable XLSX tools.`
   );
@@ -81,6 +82,7 @@ export function getRange(
   range: string,
   sheetName?: string
 ): RangeResult {
+  // Decode the A1 range and return a rectangular grid of values.
   const workbook = loadWorkbook();
   const sheet = getSheet(workbook, sheetName);
   const worksheetRange = XLSX.utils.decode_range(range);
@@ -108,6 +110,7 @@ export function updateCell(
   value: CellValue,
   sheetName?: string
 ): UpdateCellResult {
+  // Write a single cell and update the sheet range if needed.
   const workbook = loadWorkbook();
   const sheetNameResolved = sheetName ?? workbook.SheetNames[0] ?? "Sheet1";
   const sheet = getSheet(workbook, sheetNameResolved);

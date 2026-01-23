@@ -63,6 +63,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Enable tool calls only when the user provides an XLSX range mention.
     const shouldUseTools =
       lastMessage?.role === "user" &&
       typeof lastMessage.content === "string" &&
@@ -243,6 +244,7 @@ export async function POST(request: Request) {
       }
       : undefined;
 
+    // Convert UI messages into model messages compatible with the provider.
     const modelMessages = await convertToModelMessages(
       uiMessages.map((message) => {
         const { id, ...rest } = message;
@@ -251,6 +253,7 @@ export async function POST(request: Request) {
       tools ? { tools } : undefined
     );
 
+    // Stream the response and persist the assistant reply on completion.
     const result = await streamText({
       model: openai("gpt-4o-mini"),
       messages: modelMessages,

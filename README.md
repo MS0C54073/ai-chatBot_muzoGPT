@@ -45,3 +45,42 @@
 - No auth or multi-user isolation.
 - XLSX updates are direct file writes (single-writer expected).
 - Tooling is enabled only when prompts include `@Sheet!A1:B3` range references.
+
+### Requirement Mapping
+
+**Meets**
+- Next.js 16 App Router + TypeScript.
+- Thread list, create, switch, delete; messages persisted in SQLite.
+- `/api/chat` integrated with `useChat` and streaming.
+- README covers setup/run/db/xlsx.
+
+**Not fully met**
+- Bun built‑in SQLite (`bun:sqlite`) is not used; current driver is `better-sqlite3`.
+- Generative UI tools are partially wired; only confirmation UI is fully interactive.
+- XLSX end‑to‑end flow is incomplete:
+  - tool results are not rendered as tables in chat,
+  - table modal uses sample data instead of XLSX output,
+  - range mentions are not fully interpreted into tool calls.
+
+**What’s needed to reach full compliance**
+- Replace DB driver with Bun’s built‑in `bun:sqlite`.
+- Wire tool results into chat UI (table previews + click‑to‑open modal).
+- Feed XLSX tool output into the modal grid and selection.
+- Parse `@Sheet!A1:B3` mentions and invoke XLSX tools consistently.
+
+### Request/Response Flow
+
+```mermaid
+sequenceDiagram
+  participant UI as ChatPage (useChat)
+  participant API as /api/chat
+  participant AI as OpenAI
+  participant DB as SQLite
+
+  UI->>API: POST /api/chat (threadId, messages)
+  API->>DB: save user message
+  API->>AI: streamText(model, messages)
+  AI-->>API: streamed tokens
+  API-->>UI: text stream response
+  API->>DB: save assistant message (onFinish)
+```
