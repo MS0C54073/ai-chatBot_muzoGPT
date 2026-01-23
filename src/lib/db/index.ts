@@ -1,5 +1,5 @@
 import "server-only";
-import type { Database, Statement } from "sqlite";
+import type { Statement } from "better-sqlite3";
 import { getDb } from "./client";
 
 export type Thread = {
@@ -32,47 +32,54 @@ export type SaveMessageInput = {
   createdAt?: number;
 };
 
-type DbStatement = Statement;
+// Cached statements
+type DbStatement = Statement<unknown[], unknown>;
 
-const statements = {
-  insertThread: null as DbStatement | null,
-  listThreads: null as DbStatement | null,
-  insertMessage: null as DbStatement | null,
-  listMessagesByThread: null as DbStatement | null,
-  deleteThread: null as DbStatement | null,
+type Statements = {
+  insertThread: DbStatement | null;
+  listThreads: DbStatement | null;
+  insertMessage: DbStatement | null;
+  listMessagesByThread: DbStatement | null;
+  deleteThread: DbStatement | null;
 };
 
-async function getStatements() {
-  const db = await getDb();
+const statements: Statements = {
+  insertThread: null,
+  listThreads: null,
+  insertMessage: null,
+  listMessagesByThread: null,
+  deleteThread: null,
+};
+
+function getStatements() {
+  const db = getDb();
 
   if (!statements.insertThread) {
-    statements.insertThread = await db.prepare(
+    statements.insertThread = db.prepare(
       "INSERT INTO threads (id, title, created_at) VALUES (?, ?, ?)"
     );
   }
 
   if (!statements.listThreads) {
-    statements.listThreads = await db.prepare(
+    statements.listThreads = db.prepare(
       "SELECT id, title, created_at FROM threads ORDER BY created_at DESC LIMIT ? OFFSET ?"
     );
   }
 
   if (!statements.insertMessage) {
-    statements.insertMessage = await db.prepare(
+    statements.insertMessage = db.prepare(
       "INSERT INTO messages (id, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)"
     );
   }
 
   if (!statements.listMessagesByThread) {
-    statements.listMessagesByThread = await db.prepare(
+    statements.listMessagesByThread = db.prepare(
       "SELECT id, thread_id, role, content, created_at FROM messages WHERE thread_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?"
     );
   }
 
   if (!statements.deleteThread) {
-    statements.deleteThread = await db.prepare(
-      "DELETE FROM threads WHERE id = ?"
-    );
+    statements.deleteThread = db.prepare("DELETE FROM threads WHERE id = ?");
   }
 
   return statements;
@@ -85,8 +92,8 @@ export async function createThread(input: CreateThreadInput): Promise<Thread> {
     created_at: input.createdAt ?? Date.now(),
   };
 
-  const { insertThread } = await getStatements();
-  await insertThread?.run(thread.id, thread.title, thread.created_at);
+  const { insertThread } = getStatements();
+  insertThread?.run(thread.id, thread.title, thread.created_at);
 
   return thread;
 }
@@ -95,8 +102,8 @@ export async function getThreads(
   limit = 50,
   offset = 0
 ): Promise<Thread[]> {
-  const { listThreads } = await getStatements();
-  return (await listThreads?.all(limit, offset)) as Thread[];
+  const { listThreads } = getStatements();
+  return (listThreads?.all(limit, offset) as Thread[]) ?? [];
 }
 
 export async function saveMessage(
@@ -110,8 +117,8 @@ export async function saveMessage(
     created_at: input.createdAt ?? Date.now(),
   };
 
-  const { insertMessage } = await getStatements();
-  await insertMessage?.run(
+  const { insertMessage } = getStatements();
+  insertMessage?.run(
     message.id,
     message.thread_id,
     message.role,
@@ -127,11 +134,11 @@ export async function getMessagesByThread(
   limit = 200,
   offset = 0
 ): Promise<Message[]> {
-  const { listMessagesByThread } = await getStatements();
-  return (await listMessagesByThread?.all(threadId, limit, offset)) as Message[];
+  const { listMessagesByThread } = getStatements();
+  return (listMessagesByThread?.all(threadId, limit, offset) as Message[]) ?? [];
 }
 
 export async function deleteThread(threadId: string): Promise<void> {
-  const { deleteThread: deleteThreadStatement } = await getStatements();
-  await deleteThreadStatement?.run(threadId);
+  const { deleteThread: deleteThreadStatement } = getStatements();
+  deleteThreadStatement?.run(threadId);
 }

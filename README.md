@@ -3,6 +3,9 @@
 ### Setup
 
 - Install dependencies: `bun install`
+- Allow native SQLite bindings:
+  - `bun pm trust better-sqlite3`
+  - `bun install`
 - Add the sample workbook:
   - `mkdir data`
   - place `example.xlsx` at `./data/example.xlsx`

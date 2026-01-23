@@ -70,131 +70,177 @@ export async function POST(request: Request) {
 
     const tools = shouldUseTools
       ? {
-          confirmAction: tool({
-            description:
-              "Request explicit user confirmation before performing a destructive action.",
-            parameters: jsonSchema({
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                title: { type: "string" },
-                description: { type: "string" },
-                actionId: { type: "string" },
-                confirmLabel: { type: "string" },
-                cancelLabel: { type: "string" },
-              },
-              required: [],
-            }),
-            execute: async (args) => ({
-              status: "needs_confirmation",
-              ...args,
-            }),
-          }),
-          getRange: tool({
-            description: "Read a cell range from /data/example.xlsx.",
-            parameters: jsonSchema({
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                sheet: { type: "string" },
-                range: { type: "string" },
-              },
-              required: ["range"],
-            }),
-            execute: async (args) => {
-              try {
-                return { status: "ok", result: getRange(args.range, args.sheet) };
-              } catch (error) {
-                return {
-                  status: "error",
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : "Failed to read range.",
-                };
-              }
+        confirmAction: tool({
+          description:
+            "Request explicit user confirmation before performing a destructive action. You MUST use this tool before calling updateCell or any other tool that modifies data.",
+          parameters: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              title: { type: "string" },
+              description: { type: "string" },
+              actionId: { type: "string" },
+              confirmLabel: { type: "string" },
+              cancelLabel: { type: "string" },
             },
+            required: [],
           }),
-          updateCell: tool({
-            description:
-              "Update a single cell in /data/example.xlsx. Requires confirmation.",
-            parameters: jsonSchema({
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                sheet: { type: "string" },
-                cell: { type: "string" },
-                value: {
-                  oneOf: [
-                    { type: "string" },
-                    { type: "number" },
-                    { type: "boolean" },
-                    { type: "null" },
-                  ],
+          execute: async (args) => ({
+            status: "needs_confirmation",
+            ...args,
+          }),
+        }),
+        getRange: tool({
+          description: "Read a cell range from /data/example.xlsx.",
+          parameters: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              sheet: { type: "string" },
+              range: { type: "string" },
+            },
+            required: ["range"],
+          }),
+          execute: async (args) => {
+            try {
+              return { status: "ok", result: getRange(args.range, args.sheet) };
+            } catch (error) {
+              return {
+                status: "error",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to read range.",
+              };
+            }
+          },
+        }),
+        updateCell: tool({
+          description:
+            "Update a single cell in /data/example.xlsx. You MUST ask for user confirmation using the confirmAction tool BEFORE calling this tool.",
+          parameters: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              sheet: { type: "string" },
+              cell: { type: "string" },
+              value: {
+                oneOf: [
+                  { type: "string" },
+                  { type: "number" },
+                  { type: "boolean" },
+                  { type: "null" },
+                ],
+              },
+              confirmed: { type: "boolean" },
+            },
+            required: ["cell", "value"],
+          }),
+          execute: async (args) => {
+            if (!args.confirmed) {
+              return {
+                status: "needs_confirmation",
+                sheet: args.sheet,
+                cell: args.cell,
+                value: args.value as CellValue,
+              };
+            }
+            try {
+              return {
+                status: "updated",
+                result: updateCell(
+                  args.cell,
+                  args.value as CellValue,
+                  args.sheet
+                ),
+              };
+            } catch (error) {
+              return {
+                status: "error",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to update cell.",
+              };
+            }
+          },
+        }),
+        openTable: tool({
+          description: "Render a table preview for the user.",
+          parameters: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              title: { type: "string" },
+              columns: { type: "array", items: { type: "string" } },
+              rows: { type: "array", items: { type: "array" } },
+            },
+            required: ["columns", "rows"],
+          }),
+          execute: async (args) => ({
+            status: "ok",
+            ...args,
+          }),
+        }),
+        highlightCells: tool({
+          description: "Highlight specific cells within a table preview.",
+          parameters: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              title: { type: "string" },
+              columns: { type: "array", items: { type: "string" } },
+              rows: { type: "array", items: { type: "array" } },
+              highlights: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    row: { type: "number" },
+                    col: { type: "number" },
+                    color: { type: "string" },
+                  },
+                  required: ["row", "col"],
                 },
-                confirmed: { type: "boolean" },
               },
-              required: ["cell", "value"],
-            }),
-            execute: async (args) => {
-              if (!args.confirmed) {
-                return {
-                  status: "needs_confirmation",
-                  sheet: args.sheet,
-                  cell: args.cell,
-                  value: args.value as CellValue,
-                };
-              }
-              try {
-                return {
-                  status: "updated",
-                  result: updateCell(
-                    args.cell,
-                    args.value as CellValue,
-                    args.sheet
-                  ),
-                };
-              } catch (error) {
-                return {
-                  status: "error",
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : "Failed to update cell.",
-                };
-              }
             },
+            required: ["columns", "rows", "highlights"],
           }),
-          explainFormula: tool({
-            description:
-              "Explain the formula in a cell from /data/example.xlsx, if present.",
-            parameters: jsonSchema({
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                sheet: { type: "string" },
-                cell: { type: "string" },
-              },
-              required: ["cell"],
-            }),
-            execute: async (args) => {
-              try {
-                return {
-                  status: "ok",
-                  result: explainFormula(args.cell, args.sheet),
-                };
-              } catch (error) {
-                return {
-                  status: "error",
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : "Failed to explain formula.",
-                };
-              }
+          execute: async (args) => ({
+            status: "ok",
+            ...args,
+          }),
+        }),
+        explainFormula: tool({
+          description:
+            "Explain the formula in a cell from /data/example.xlsx, if present.",
+          parameters: jsonSchema({
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              sheet: { type: "string" },
+              cell: { type: "string" },
             },
+            required: ["cell"],
           }),
-        }
+          execute: async (args) => {
+            try {
+              return {
+                status: "ok",
+                result: explainFormula(args.cell, args.sheet),
+              };
+            } catch (error) {
+              return {
+                status: "error",
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to explain formula.",
+              };
+            }
+          },
+        }),
+      }
       : undefined;
 
     const modelMessages = await convertToModelMessages(
