@@ -1,5 +1,26 @@
 "use client";
 
+/**
+ * Chat Interface Component
+ * 
+ * Main UI for conversing with the AI assistant.
+ * Features:
+ * - Thread creation and management via sidebar
+ * - Real-time message streaming using Vercel AI SDK
+ * - Message editing and regeneration
+ * - File upload injection into model context
+ * - Tool calling with confirmation cards
+ * - Table preview modal for XLSX ranges
+ * 
+ * Component hierarchy:
+ * - ChatPage (main layout) 
+ *   - ThreadsSidebar (left sidebar with thread list)
+ *   - ChatThread (conversation area, one per thread)
+ *     - ConfirmActionCard (confirmation UI)
+ *     - TableModal (XLSX preview)
+ *     - Message rendering
+ */
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useChat, type Message as AiMessage } from "@ai-sdk/react";
 import ThreadsSidebar, {
@@ -26,6 +47,7 @@ type ChatThreadProps = {
   initialMessages: AiMessage[];
   onLocalMessageUpdate?: (updater: (prev: MessageRecord[]) => MessageRecord[]) => void;
   messageRecords?: MessageRecord[];
+  onTitleUpdate?: (newTitle: string) => void;
 };
 
 type UploadedFile = {
@@ -39,8 +61,15 @@ function ChatThread({
   initialMessages,
   onLocalMessageUpdate,
   messageRecords = [],
+  onTitleUpdate,
 }: ChatThreadProps) {
-  // Extract the visible text from streamed or persisted messages.
+  /**
+   * Extracts visible text from AI SDK message formats.
+   * Handles both string content and streamed message parts.
+   * Used to display message content in the UI.
+   * @param {AiMessage} message - Message from useChat hook
+   * @returns {string} Displayable text content
+   */
   const getMessageText = (message: AiMessage) => {
     if ("content" in message && typeof message.content === "string") {
       return message.content;
@@ -52,10 +81,15 @@ function ChatThread({
     }
     return "";
   };
+  
+  // UI state for errors, modals, and file uploads
   const [chatError, setChatError] = useState<string | null>(null);
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<UploadedFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  
+  // Initialize chat session with Vercel AI SDK
+  // Handles streaming, tool calling, and message state management
   const {
     messages,
     input,
@@ -80,9 +114,11 @@ function ChatThread({
     },
   });
 
+  // Refs for keyboard handling and UI interaction
   const keyboardSubmitRef = useRef(false);
   const [showKeyboardToast, setShowKeyboardToast] = useState(false);
 
+  // State for editing and deleting messages
   const [editingMessage, setEditingMessage] = useState<{
     id: string;
     content: string;
@@ -90,8 +126,85 @@ function ChatThread({
   const [pendingDeleteMessage, setPendingDeleteMessage] =
     useState<{ id: string } | null>(null);
 
+  // Track if we've already generated a summary title for this thread
+  const [titleGenerated, setTitleGenerated] = useState(false);
+
+  /**
+   * Generates a short summary title (3-5 words) from the first user message.
+   * Uses simple text extraction instead of calling the AI model again.
+   * @param {string} userMessage - The first message from the user
+   * @returns {string} A short summary title
+   */
+  function generateTitleFromMessage(userMessage: string): string {
+    // Take the first 40 characters or first sentence, whichever is shorter
+    let title = userMessage.replace(/\n/g, " ").trim();
+    
+    // Find first sentence (ends with . ! ?)
+    const sentenceMatch = title.match(/^[^.!?]*[.!?]/);
+    if (sentenceMatch) {
+      title = sentenceMatch[0].replace(/[.!?]$/, "").trim();
+    }
+    
+    // Limit to 50 characters
+    if (title.length > 50) {
+      title = title.substring(0, 50).trim();
+      // Remove incomplete word at the end
+      const lastSpace = title.lastIndexOf(" ");
+      if (lastSpace > 0) {
+        title = title.substring(0, lastSpace);
+      }
+    }
+    
+    return title || "Chat";
+  }
+
+  /**
+   * Automatically generates and updates the thread title based on the first user message.
+   * This effect runs when the first user message is sent.
+   */
+  useEffect(() => {
+    if (titleGenerated || !threadId) {
+      return;
+    }
+
+    // Find the first user message
+    const firstUserMessage = messages.find((msg) => msg.role === "user");
+    if (!firstUserMessage) {
+      return;
+    }
+
+    const userContent = getMessageText(firstUserMessage);
+    if (!userContent || userContent.trim().length === 0) {
+      return;
+    }
+
+    // Generate title and update thread
+    const newTitle = generateTitleFromMessage(userContent);
+    setTitleGenerated(true);
+
+    // Update thread title via API
+    fetch(`/api/threads/${threadId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: newTitle }),
+    })
+      .then((response) => {
+        if (response.ok && onTitleUpdate) {
+          // Notify parent component to update the threads list
+          onTitleUpdate(newTitle);
+        }
+      })
+      .catch(() => {
+        // Silently ignore errors - title generation is non-critical
+      });
+  }, [messages, threadId, titleGenerated, onTitleUpdate]);
+
   const handleConfirmAction = (toolCallId: string, actionId?: string) => {
     // Send tool result to the model so it can perform the confirmed action.
+    /**
+     * User confirmed a destructive action (e.g., cell update).
+     * Sends confirmation to model through addToolResult and appends confirmation message.
+     */
     addToolResult({
       toolCallId,
       result: { confirmed: true, actionId },
@@ -104,6 +217,10 @@ function ChatThread({
 
   const handleCancelAction = (toolCallId: string, actionId?: string) => {
     // Cancel the action and add a user-visible cancellation message.
+    /**
+     * User cancelled a destructive action.
+     * Sends cancellation to model and appends user-visible message.
+     */
     addToolResult({
       toolCallId,
       result: { confirmed: false, actionId, cancelled: true },
@@ -114,12 +231,21 @@ function ChatThread({
     });
   };
 
+  /**
+   * Saves edited message and regenerates all follow-up messages.
+   * Steps:
+   * 1. Update the edited message via API
+   * 2. Delete all messages after the edited one
+   * 3. Update local state and trigger model regeneration
+   */
   async function handleSaveEdit() {
     if (!editingMessage) {
       return;
     }
     const editedId = editingMessage.id;
     const editedRecord = messageRecords.find((message) => message.id === editedId);
+    
+    // Persist the edited message content to the database
     const response = await fetch(`/api/threads/${threadId}/messages`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -133,6 +259,7 @@ function ChatThread({
       return;
     }
 
+    // Delete all follow-up messages so the model can regenerate from this point
     if (editedRecord) {
       await fetch(`/api/threads/${threadId}/messages`, {
         method: "DELETE",
@@ -141,6 +268,7 @@ function ChatThread({
       });
     }
 
+    // Update local message state
     if (onLocalMessageUpdate) {
       onLocalMessageUpdate((prev) =>
         prev
@@ -155,6 +283,7 @@ function ChatThread({
       );
     }
 
+    // Update AI SDK message state and trigger regeneration
     setMessages((prev) => {
       const index = prev.findIndex((message) => message.id === editedId);
       if (index === -1) {
@@ -176,6 +305,10 @@ function ChatThread({
     await reload();
   }
 
+  /**
+   * Deletes a message and updates local state.
+   * Used by both user messages and assistant responses.
+   */
   async function confirmDeleteMessage(message: { id: string }) {
     const response = await fetch(`/api/threads/${threadId}/messages`, {
       method: "DELETE",
@@ -206,12 +339,21 @@ function ChatThread({
 
   function handleInsertRange(rangeRef: string) {
     // Insert the selected range mention into the input.
+    /**
+     * User selected a range from the table modal (e.g., "Sheet1!A1:B3").
+     * Appends it to the current input text or replaces empty input.
+     */
     setInput((current) =>
       current.trim().length === 0 ? rangeRef : `${current} ${rangeRef}`
     );
     setIsTableModalOpen(false);
   }
 
+  /**
+   * Handles file upload via form input.
+   * Posts file to API, stores upload metadata, and attaches to message.
+   * @param {File} file - The uploaded file
+   */
   async function handleFileUpload(file: File) {
     setIsUploading(true);
     const formData = new FormData();
@@ -229,15 +371,19 @@ function ChatThread({
     setAttachedFiles((prev) => [...prev, uploaded]);
   }
 
+  /**
+   * Removes an uploaded file from the attachment list.
+   * @param {string} id - Upload ID to remove
+   */
   function handleRemoveFile(id: string) {
     setAttachedFiles((prev) => prev.filter((file) => file.id !== id));
   }
 
-  // Refs for scrolling and form submission via keyboard
+  // DOM refs for scrolling and keyboard event handling
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
 
-  // Auto-scroll to the bottom when messages change or while loading new assistant tokens
+  // Auto-scroll to bottom when new messages arrive or assistant is streaming
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
@@ -714,13 +860,13 @@ export default function () {
           </div>
         ) : !activeThreadId ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-4 text-sm text-gray-400">
-            <div>Create a thread to start chatting.</div>
+            <div>Hello! Write a text to chat with muzoGPT</div>
             <button
               type="button"
               onClick={handleNewThread}
               className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white"
             >
-              New thread
+              New Chat
             </button>
           </div>
         ) : (
@@ -736,6 +882,16 @@ export default function () {
                 initialMessages={initialMessages}
                 onLocalMessageUpdate={setThreadMessages}
                 messageRecords={threadMessages}
+                onTitleUpdate={(newTitle) => {
+                  // Update the thread title in the sidebar
+                  setThreads((prev) =>
+                    prev.map((thread) =>
+                      thread.id === activeThreadId
+                        ? { ...thread, title: newTitle }
+                        : thread
+                    )
+                  );
+                }}
               />
             )}
           </div>

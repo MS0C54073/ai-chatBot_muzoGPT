@@ -1,3 +1,18 @@
+/**
+ * Chat API Route Handler
+ * 
+ * This endpoint handles streaming chat interactions with the OpenAI API.
+ * It manages message persistence, file uploads, and tool-enabled interactions
+ * for reading/updating XLSX files and confirming destructive actions.
+ * 
+ * Key features:
+ * - Persists user and assistant messages to SQLite
+ * - Streams responses using the Vercel AI SDK
+ * - Supports optional XLSX tools (getRange, updateCell, explainFormula)
+ * - Injects uploaded file contents as context to the model
+ * - Handles tool calls with confirmation for destructive operations
+ */
+
 import { NextResponse } from "next/server";
 import fs from "node:fs/promises";
 import {
@@ -19,6 +34,13 @@ import {
 
 export const runtime = "nodejs";
 
+/**
+ * ChatRequest type definition
+ * @property {string} threadId - UUID of the conversation thread (required)
+ * @property {UIMessage[]} messages - Array of chat messages (user/assistant) to send to the model
+ * @property {boolean} stream - Whether to stream the response (default: true)
+ * @property {string[]} fileIds - Array of upload IDs to inject into model context
+ */
 type ChatRequest = {
   threadId?: string;
   messages?: UIMessage[];
@@ -26,6 +48,21 @@ type ChatRequest = {
   fileIds?: string[];
 };
 
+/**
+ * POST handler for chat requests
+ * 
+ * Workflow:
+ * 1. Validate and parse the incoming request JSON
+ * 2. Extract threadId, messages, and file IDs from the request body
+ * 3. Persist the user message to the database
+ * 4. Check for OpenAI API key
+ * 5. Determine if XLSX tools should be enabled (based on @ mentions)
+ * 6. Load and inject uploaded file contents as system context
+ * 7. Stream the response from OpenAI and persist the assistant reply
+ * 
+ * @param {Request} request - NextRequest containing ChatRequest JSON body
+ * @returns {Response} Streaming text response or JSON error response
+ */
 export async function POST(request: Request) {
   let body: ChatRequest;
   try {
@@ -34,15 +71,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
+  // Extract and validate request parameters
   const threadId = body.threadId?.trim();
   const uiMessages = Array.isArray(body.messages) ? body.messages : [];
   const shouldStream = body.stream !== false;
   const fileIds = Array.isArray(body.fileIds) ? body.fileIds : [];
 
+  // Thread ID is required to link messages to a conversation
   if (!threadId) {
     return NextResponse.json({ error: "threadId is required" }, { status: 400 });
   }
 
+  // Persist the user message to the database so it's not lost
   const lastMessage = uiMessages[uiMessages.length - 1];
   if (lastMessage?.role === "user" && typeof lastMessage.content === "string") {
     try {
@@ -59,6 +99,7 @@ export async function POST(request: Request) {
     }
   }
 
+  // Ensure OpenAI API key is configured before attempting to call the API
   if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(
       { error: "Missing OPENAI_API_KEY in .env.local" },
@@ -67,14 +108,18 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Only enable tools when the prompt includes an XLSX range mention.
+    // Tools are only enabled if the user's message contains XLSX range mentions (e.g., @Sheet!A1:B3)
+    // This prevents unnecessary tool definitions and keeps the model focused on pure chat when not needed
     const shouldUseTools =
       lastMessage?.role === "user" &&
       typeof lastMessage.content === "string" &&
       lastMessage.content.includes("@");
 
+    // Define all available tools. These are only passed to the model if shouldUseTools is true
     const tools = shouldUseTools
       ? {
+      // confirmAction: Prompts user to confirm before destructive operations
+      // Used as a gate before updateCell or any other mutating tools
       confirmAction: tool({
         description:
           "Request explicit user confirmation before performing a destructive action. You MUST use this tool before calling updateCell or any other tool that modifies data.",
@@ -95,6 +140,8 @@ export async function POST(request: Request) {
           ...args,
         }),
       }),
+      // getRange: Reads a rectangular range of cells from the XLSX file
+      // Returns the values in a 2D array format
       getRange: tool({
         description: "Read a cell range from /data/example.xlsx.",
         inputSchema: jsonSchema({
@@ -120,6 +167,8 @@ export async function POST(request: Request) {
           }
         },
       }),
+      // updateCell: Updates a single cell value in the XLSX file
+      // Requires explicit user confirmation before executing
       updateCell: tool({
         description:
           "Update a single cell in /data/example.xlsx. You MUST ask for user confirmation using the confirmAction tool BEFORE calling this tool.",
@@ -170,6 +219,8 @@ export async function POST(request: Request) {
           }
         },
       }),
+      // openTable: Renders a formatted table in the chat UI
+      // Can be used to display ranges or query results
       openTable: tool({
         description: "Render a table preview for the user.",
         inputSchema: jsonSchema({
@@ -200,6 +251,8 @@ export async function POST(request: Request) {
           ...args,
         }),
       }),
+      // highlightCells: Highlights specific cells in a table with colors
+      // Useful for drawing attention to important data or anomalies
       highlightCells: tool({
         description: "Highlight specific cells within a table preview.",
         inputSchema: jsonSchema({
@@ -242,6 +295,8 @@ export async function POST(request: Request) {
           ...args,
         }),
       }),
+      // explainFormula: Explains a formula (if present) in a specific cell
+      // Returns the formula text and a human-readable explanation
       explainFormula: tool({
         description:
           "Explain the formula in a cell from /data/example.xlsx, if present.",
@@ -274,14 +329,19 @@ export async function POST(request: Request) {
     }
       : undefined;
 
-    // Convert UI messages into model messages compatible with the provider.
+    // Load and prepare uploaded file contents as additional context for the model
+    // Only text/JSON files are injected; binary files are skipped
     const fileContext: string[] = [];
     for (const fileId of fileIds) {
       const upload = await getUploadById(fileId);
       if (!upload) {
         continue;
       }
+      
+      // Start with file metadata (name and mime type)
       let preview = `File: ${upload.filename} (${upload.mime_type})`;
+      
+      // For text and JSON files, read and include file contents (capped at 5KB)
       if (
         upload.mime_type.startsWith("text/") ||
         upload.mime_type.includes("json")
@@ -293,19 +353,23 @@ export async function POST(request: Request) {
           preview = `${preview}\n[Unable to read file contents]`;
         }
       } else {
+        // Binary files are only identified; contents are not included
         preview = `${preview}\n[Binary file contents not included]`;
       }
+      
       fileContext.push(preview);
     }
 
+    // Convert UI-compatible messages into OpenAI API format
     const modelMessages = await convertToModelMessages(
       uiMessages.map((message) => {
-        const { id, ...rest } = message;
+        const { id, ...rest } = message; // Remove UI-only message IDs
         return rest;
       }),
       tools ? { tools } : undefined
     );
 
+    // If files were uploaded, prepend them as system context so the model knows about them
     const contextMessages =
       fileContext.length > 0
         ? [
@@ -317,33 +381,41 @@ export async function POST(request: Request) {
           ]
         : [];
 
-    // Stream the response and persist the assistant reply on completion.
+    // Stream the response from OpenAI and persist the assistant reply to the database
+    // The onFinish callback ensures the full response is saved after streaming completes
     const result = await streamText({
       model: openai("gpt-4o-mini"),
       messages: [...contextMessages, ...modelMessages],
-      tools,
+      tools, // Tools are undefined if no XLSX range mentions are detected
       async onFinish({ text }) {
+        // Skip persisting empty responses
         if (text.trim().length === 0) {
           return;
         }
         try {
+          // Persist the assistant's response to the database for thread history
           await saveMessage({
             threadId,
             role: "assistant",
             content: text,
           });
         } catch {
-          // Best-effort persistence; avoid crashing the stream on DB errors.
+          // Log database errors but don't crash the stream response
+          // The stream has already begun sending data, so failures here are non-critical
         }
       },
     });
 
+    // Return response in the requested format (streaming or JSON)
     if (shouldStream) {
       return result.toTextStreamResponse();
     }
+    
+    // Fallback: wait for full response and return as JSON (non-streaming)
     const text = await result.text;
     return NextResponse.json({ text });
   } catch (error) {
+    // Catch any unexpected errors and return a generic error response
     const message =
       error instanceof Error ? error.message : "Failed to generate response";
     console.error("Chat API error:", error);
